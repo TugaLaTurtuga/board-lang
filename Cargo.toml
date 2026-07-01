@@ -1,0 +1,15 @@
+[package]
+name = "board-lang"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+# Non-local dependencies
+clap = { version = "4.0", features = ["derive"] }
+toml = "1.1.2"
+webbrowser = "1"
+serde_json = "1.0.150"
+
+# Local dependencies
+board_lexer = { path = "./dependencies/lexer" }
+board_website = { path = "./dependencies/website" }
