@@ -6,12 +6,8 @@ use serde_json::{
     Value::{self},
     json,
 };
+use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::{HashMap, hash_map::Values};
-
-pub fn test() -> String {
-    "this is a test for board-lang dependencie".to_string()
-}
 
 pub struct Lexer<'a> {
     input: &'a str,
@@ -23,22 +19,34 @@ impl<'a> Lexer<'a> {
     }
 
     pub fn tokenize(&self, ignore_whitespace: bool, ignore_comments: bool) -> Vec<String> {
-        if ignore_whitespace {
-            let mut tokens = Vec::new();
-            for line in self.input.lines() {
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
+        let mut tokens: Vec<String> = self.input.split('\n').map(String::from).collect();
+
+        if ignore_whitespace || ignore_comments {
+            tokens.retain(|token| {
+                let trimmed = token.trim();
+
+                // Remove empty lines
+                if ignore_whitespace && trimmed.is_empty() {
+                    return false;
                 }
-                if ignore_comments && line.starts_with("//") {
-                    continue;
+
+                // Remove comment lines
+                if ignore_comments && trimmed.starts_with("//") {
+                    return false;
                 }
-                tokens.extend(line.split_whitespace().map(String::from));
+
+                true
+            });
+
+            // Normalize whitespace AFTER filtering
+            if ignore_whitespace {
+                for token in &mut tokens {
+                    *token = token.trim().to_string();
+                }
             }
-            tokens
-        } else {
-            self.input.split('\n').map(String::from).collect()
         }
+
+        tokens
     }
 
     pub fn get_json(&self, ignore_whitespace: bool, ignore_comments: bool) -> Value {
@@ -55,47 +63,25 @@ impl<'a> Lexer<'a> {
 
     /// Checks the current .bd code and clears it
     pub fn clear_code(&self, ignore_comments: bool) -> String {
-        let json = self.get_json(true, ignore_comments);
+        let json = self.get_json(false, false);
         return create_code_from_json(json, true, ignore_comments);
     }
 }
 
 /// Creates code from json,
-/// check ../examples/board/example.json, ../examples/board/example.bd and ../examples/board/example_cleaned.bd
+/// check ../test/board/example.json, ../test/board/example.bd and ../test/board/example_cleaned.bd
 /// for examples
 pub fn create_code_from_json(
     json: Value,
     ignore_whitespaces: bool,
     ignore_comments: bool,
 ) -> String {
-    // Serialize initial value
-    let mut json_str = match serde_json::to_string(&json) {
-        Ok(s) => s,
-        Err(_) => {
-            return r#"{"profiles":[],"tags":{},"context":{},"boards":[],"tasks":[]}"#.to_string();
-        }
-    };
-
-    // Remove `"inline_comment": <something>,`
-    if ignore_comments {
-        json_str = remove_inline_comments(json_str);
-    }
-
-    // Remove empty placeholder objects
-    json_str = json_str.replace(r#"{"__empty__":true},"#, "");
-
-    // Parse back to JSON to normalize / validate
-    let json_new_value: serde_json::Value = match serde_json::from_str(&json_str) {
-        Ok(v) => v,
-        Err(_) => json, // fallback to original value
-    };
-
     // Create code based on json
     let mut code = String::new();
 
     // Ensure `profiles` is an array
     code.push_str("[PROFILES]\n");
-    if let Some(profiles) = json_new_value.get("profiles").and_then(Value::as_array) {
+    if let Some(profiles) = json.get("profiles").and_then(Value::as_array) {
         for line in profiles {
             // Each line must be an object
             if let Some(obj) = line.as_object() {
@@ -109,7 +95,7 @@ pub fn create_code_from_json(
                 // Comment
                 else if let Some(comment) = obj.get("comment").and_then(Value::as_str) {
                     if !ignore_comments {
-                        code.push_str("//");
+                        code.push_str("// ");
                         code.push_str(comment);
                         code.push('\n');
                     }
@@ -125,8 +111,8 @@ pub fn create_code_from_json(
                 if let Some(inline) = obj.get("inline_comment").and_then(Value::as_str)
                     && !ignore_comments
                 {
-                    code.push_str("// ");
-                    code.push_str(inline);
+                    code.push_str(" // ");
+                    code.push_str(inline.trim());
                 }
 
                 code.push('\n');
@@ -135,7 +121,7 @@ pub fn create_code_from_json(
     }
 
     code.push_str("\n[BOARDS]\n");
-    if let Some(boards) = json_new_value.get("boards").and_then(Value::as_array) {
+    if let Some(boards) = json.get("boards").and_then(Value::as_array) {
         for line in boards {
             // Each line must be an object
             if let Some(obj) = line.as_object() {
@@ -156,25 +142,28 @@ pub fn create_code_from_json(
                     continue;
                 }
 
+                let mut line_str = String::new();
+
                 // Priority
-                if let Some(priority) = obj.get("priority").and_then(Value::as_str) {
-                    if let Ok(value) = priority.parse::<i32>() {
-                        code.push_str(&insert_priority(value));
-                        code.push_str(" ");
+                if let Some(priority) = obj.get("priority").and_then(Value::as_u64) {
+                    let priority_str = insert_priority(priority);
+                    if !priority_str.is_empty() {
+                        line_str.push_str(&priority_str);
+                        line_str.push_str(" ");
                     }
                 }
 
                 // Board
                 if let Some(label) = obj.get("label").and_then(Value::as_str) {
-                    code.push_str(label);
-                    code.push_str(" ");
+                    line_str.push_str(label);
+                    line_str.push_str(" ");
                 }
 
                 // Color
-                if let Some(color) = obj.get("label").and_then(Value::as_str) {
-                    code.push_str("#");
-                    code.push_str(color);
-                    code.push_str(" ");
+                if let Some(color) = obj.get("color").and_then(Value::as_str) {
+                    line_str.push_str("#");
+                    line_str.push_str(color);
+                    line_str.push_str(" ");
                 }
 
                 // Tags
@@ -184,26 +173,48 @@ pub fn create_code_from_json(
                     for tag in tags {
                         if let Some(value) = tag.as_str() {
                             if !value.is_empty() && seen.insert(value) {
-                                code.push_str("+");
-                                code.push_str(value);
-                                code.push_str(" ");
+                                line_str.push_str("+");
+                                line_str.push_str(value);
+                                line_str.push_str(" ");
                             }
                         }
                     }
                 }
 
                 // Contexts
-                if let Some(contexts) = obj.get("tags").and_then(Value::as_array) {
+                if let Some(contexts) = obj.get("contexts").and_then(Value::as_array) {
                     let mut seen = HashSet::new();
 
                     for context in contexts {
                         if let Some(value) = context.as_str() {
                             if !value.is_empty() && seen.insert(value) {
-                                code.push_str("@");
-                                code.push_str(value);
-                                code.push_str(" ");
+                                line_str.push_str("@");
+                                line_str.push_str(value);
+                                line_str.push_str(" ");
                             }
                         }
+                    }
+                }
+
+                // due
+                if let Some(due) = obj.get("due").and_then(Value::as_object) {
+                    let mut day: u8 = 0;
+                    let mut month: u8 = 0;
+                    let mut year: i32 = 0;
+                    if let Some(d) = due.get("day").and_then(Value::as_u64) {
+                        day = d as u8;
+                    }
+                    if let Some(m) = due.get("month").and_then(Value::as_u64) {
+                        month = m as u8;
+                    }
+                    if let Some(y) = due.get("year").and_then(Value::as_i64) {
+                        year = y as i32;
+                    }
+
+                    if day != 0 || month != 0 || year != 0 {
+                        line_str.push_str("!");
+                        line_str.push_str(&board_settings::format_date(day, month, year));
+                        line_str.push_str(" ");
                     }
                 }
 
@@ -218,11 +229,11 @@ pub fn create_code_from_json(
                                 let link = arr[1].as_str().unwrap_or("");
 
                                 if !name.is_empty() && seen.insert(name.to_string()) {
-                                    code.push_str("(");
-                                    code.push_str(name);
-                                    code.push_str(")[");
-                                    code.push_str(link);
-                                    code.push_str("]");
+                                    line_str.push_str("[");
+                                    line_str.push_str(name);
+                                    line_str.push_str("](");
+                                    line_str.push_str(link);
+                                    line_str.push_str(") ");
                                 }
                             }
                         }
@@ -233,16 +244,159 @@ pub fn create_code_from_json(
                 if let Some(inline) = obj.get("inline_comment").and_then(Value::as_str)
                     && !ignore_comments
                 {
-                    code.push_str("// ");
-                    code.push_str(inline);
+                    line_str.push_str("// ");
+                    line_str.push_str(inline);
                 }
 
-                code.push('\n');
+                line_str = line_str.trim().to_string();
+                line_str.push_str("\n");
+                code.push_str(&line_str);
             }
         }
     }
 
-    serde_json::to_string(&json_new_value).unwrap_or_default()
+    code.push_str("\n[TASKS]\n");
+    if let Some(tasks) = json.get("tasks").and_then(Value::as_array) {
+        for line in tasks {
+            // Each line must be an object
+            if let Some(obj) = line.as_object() {
+                // Whitespace
+                if obj.contains_key("__empty__") {
+                    if !ignore_whitespaces {
+                        code.push('\n');
+                    }
+                    continue;
+                }
+                // Comment
+                else if let Some(comment) = obj.get("comment").and_then(Value::as_str) {
+                    if !ignore_comments {
+                        code.push_str("// ");
+                        code.push_str(comment);
+                        code.push('\n');
+                    }
+                    continue;
+                }
+
+                let mut line_str = String::new();
+
+                // Priority
+                if let Some(priority) = obj.get("priority").and_then(Value::as_u64) {
+                    let priority_str = insert_priority(priority);
+                    if !priority_str.is_empty() {
+                        line_str.push_str(&priority_str);
+                        line_str.push_str(" ");
+                    }
+                }
+
+                // Board
+                if let Some(board) = obj.get("board").and_then(Value::as_str) {
+                    line_str.push_str(board);
+                    line_str.push_str(" - ");
+                }
+
+                // Label
+                if let Some(label) = obj.get("label").and_then(Value::as_str) {
+                    line_str.push_str(label);
+                    line_str.push_str(" ");
+                }
+
+                // Color
+                if let Some(color) = obj.get("color").and_then(Value::as_str) {
+                    line_str.push_str("#");
+                    line_str.push_str(color);
+                    line_str.push_str(" ");
+                }
+
+                // Tags
+                if let Some(tags) = obj.get("tags").and_then(Value::as_array) {
+                    let mut seen = HashSet::new();
+
+                    for tag in tags {
+                        if let Some(value) = tag.as_str() {
+                            if !value.is_empty() && seen.insert(value) {
+                                line_str.push_str("+");
+                                line_str.push_str(value);
+                                line_str.push_str(" ");
+                            }
+                        }
+                    }
+                }
+
+                // Contexts
+                if let Some(contexts) = obj.get("contexts").and_then(Value::as_array) {
+                    let mut seen = HashSet::new();
+
+                    for context in contexts {
+                        if let Some(value) = context.as_str() {
+                            if !value.is_empty() && seen.insert(value) {
+                                line_str.push_str("@");
+                                line_str.push_str(value);
+                                line_str.push_str(" ");
+                            }
+                        }
+                    }
+                }
+
+                // due
+                if let Some(due) = obj.get("due").and_then(Value::as_object) {
+                    let mut day: u8 = 0;
+                    let mut month: u8 = 0;
+                    let mut year: i32 = 0;
+                    if let Some(d) = due.get("day").and_then(Value::as_u64) {
+                        day = d as u8;
+                    }
+                    if let Some(m) = due.get("month").and_then(Value::as_u64) {
+                        month = m as u8;
+                    }
+                    if let Some(y) = due.get("year").and_then(Value::as_i64) {
+                        year = y as i32;
+                    }
+
+                    if day != 0 || month != 0 || year != 0 {
+                        line_str.push_str("!");
+                        line_str.push_str(&board_settings::format_date(day, month, year));
+                        line_str.push_str(" ");
+                    }
+                }
+
+                // links
+                if let Some(links) = obj.get("links").and_then(Value::as_array) {
+                    let mut seen = HashSet::new();
+
+                    for link_item in links {
+                        if let Some(arr) = link_item.as_array() {
+                            if arr.len() >= 2 {
+                                let name = arr[0].as_str().unwrap_or("");
+                                let link = arr[1].as_str().unwrap_or("");
+
+                                if !name.is_empty() && seen.insert(name.to_string()) {
+                                    line_str.push_str("[");
+                                    line_str.push_str(name);
+                                    line_str.push_str("](");
+                                    line_str.push_str(link);
+                                    line_str.push_str(") ");
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Inline comment
+                if let Some(inline) = obj.get("inline_comment").and_then(Value::as_str)
+                    && !ignore_comments
+                {
+                    line_str.push_str("// ");
+                    line_str.push_str(inline);
+                }
+
+                line_str = line_str.trim().to_string();
+                line_str.push_str("\n");
+                code.push_str(&line_str);
+            }
+        }
+    }
+
+    code
 }
 
 fn empty() -> Value {
@@ -307,9 +461,8 @@ fn parse_profiles(lines: Option<&Vec<String>>) -> Vec<Value> {
 
         let mut entry = Map::new();
 
-        // Full-line comment
-        if let Some(comment) = full_line_comment(line) {
-            entry.insert("comment".to_string(), json!(comment));
+        if full_line_comment(line) {
+            entry.insert("comment".to_string(), json!(line[2..].trim()));
             profiles_object.push(Value::Object(entry));
             continue;
         }
@@ -344,8 +497,8 @@ fn parse_boards(lines: Option<&Vec<String>>) -> Vec<Value> {
         }
 
         let mut entry = Map::new();
-        if let Some(comment) = full_line_comment(line) {
-            entry.insert("comment".to_string(), json!(comment));
+        if full_line_comment(line) {
+            entry.insert("comment".to_string(), json!(line[2..].trim()));
             boards_object.push(Value::Object(entry));
             continue;
         }
@@ -401,8 +554,8 @@ fn parse_tasks(lines: Option<&Vec<String>>) -> Vec<Value> {
         }
 
         let mut entry = Map::new();
-        if let Some(comment) = full_line_comment(line) {
-            entry.insert("comment".to_string(), json!(comment));
+        if full_line_comment(line) {
+            entry.insert("comment".to_string(), json!(line[2..].trim()));
             tasks.push(Value::Object(entry));
             continue;
         }
@@ -444,9 +597,11 @@ fn parse_tasks(lines: Option<&Vec<String>>) -> Vec<Value> {
     tasks
 }
 
-fn full_line_comment(line: &str) -> Option<String> {
-    line.strip_prefix("//")
-        .map(|comment| comment.trim().to_string())
+fn full_line_comment(line: &str) -> bool {
+    if line.trim_start().starts_with("//") {
+        return true;
+    }
+    false
 }
 
 fn extract_inline_comment(line: &str) -> (String, String) {
@@ -479,9 +634,11 @@ fn extract_priority(line: &str) -> (usize, String) {
     (0, line.to_string())
 }
 
-fn insert_priority(value: i32) -> String {
-    if value > 3 {
-        value.to_string()
+fn insert_priority(value: u64) -> String {
+    if value == 0 {
+        return String::new();
+    } else if value > 3 {
+        value.to_string() + "*"
     } else {
         "*".repeat(value.max(0) as usize)
     }
@@ -507,96 +664,51 @@ fn board_label(line: &str) -> String {
 
 fn extract_label(line: &str) -> String {
     let line = extract_inline_comment(line).0;
-    let line = remove_links(&line);
-    let line = remove_rgb_functions(&line);
-    let mut output = String::new();
-    let chars: Vec<char> = line.chars().collect();
-    let mut index = 0;
 
-    while index < chars.len() {
-        match chars[index] {
-            '+' | '@' => {
-                index += 1;
-                while index < chars.len() && is_word_char(chars[index]) {
-                    index += 1;
-                }
-            }
-            '!' => {
-                index += 1;
-                while index < chars.len() && is_due_char(chars[index]) {
-                    index += 1;
-                }
-            }
-            '#' => {
-                index += 1;
-                while index < chars.len() && chars[index].is_ascii_hexdigit() {
-                    index += 1;
-                }
-            }
-            ch => {
-                output.push(ch);
-                index += 1;
-            }
-        }
-    }
+    let re_links = Regex::new(r"\[[^\]]+\]\([^)]+\)").unwrap();
+    let line = re_links.replace_all(&line, "");
 
-    output.trim().to_string()
+    let re_rgb = Regex::new(r"rgba?\([^)]+\)").unwrap();
+    let line = re_rgb.replace_all(&line, "");
+
+    let re_hex = Regex::new(r"#[0-9a-fA-F]{6,8}").unwrap();
+    let line = re_hex.replace_all(&line, "");
+
+    let re_tags = Regex::new(r"\+[a-zA-Z0-9_]+").unwrap();
+    let line = re_tags.replace_all(&line, "");
+
+    let re_ctx = Regex::new(r"@[a-zA-Z0-9_]+").unwrap();
+    let line = re_ctx.replace_all(&line, "");
+
+    let re_due = Regex::new(r"![0-9/]+").unwrap();
+    let line = re_due.replace_all(&line, "");
+
+    line.trim().to_string()
 }
 
 fn extract_prefixed_words(line: &str, prefix: char) -> Vec<String> {
-    let chars: Vec<char> = line.chars().collect();
-    let mut values = Vec::new();
-    let mut index = 0;
-
-    while index < chars.len() {
-        if chars[index] == prefix {
-            index += 1;
-            let start = index;
-            while index < chars.len() && is_word_char(chars[index]) {
-                index += 1;
-            }
-            if start < index {
-                values.push(chars[start..index].iter().collect());
-            }
-        } else {
-            index += 1;
-        }
-    }
-
-    values
+    let re_str = format!(r"{}([a-zA-Z0-9_]+)", regex::escape(&prefix.to_string()));
+    let re = Regex::new(&re_str).unwrap();
+    re.captures_iter(line)
+        .map(|cap| cap[1].to_string())
+        .collect()
 }
 
 fn extract_due(line: &str) -> Value {
-    let chars: Vec<char> = line.chars().collect();
-    let mut index = 0;
-
-    while index < chars.len() {
-        if chars[index] == '!' {
-            let start = index + 1;
-            let mut end = start;
-            while end < chars.len() && is_due_char(chars[end]) {
-                end += 1;
-            }
-
-            let date: String = chars[start..end].iter().collect();
-            let parts: Vec<&str> = date.split('/').collect();
-            if parts.len() == 3 {
-                if let (Ok(day), Ok(month), Ok(year)) = (
-                    parts[0].parse::<u64>(),
-                    parts[1].parse::<u64>(),
-                    parts[2].parse::<u64>(),
-                ) {
-                    return json!({
-                        "day": day,
-                        "month": month,
-                        "year": year
-                    });
-                }
-            }
+    let re = Regex::new(r"!(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})").unwrap();
+    if let Some(cap) = re.captures(line) {
+        if let (Ok(day), Ok(month), Ok(year)) = (
+            cap[1].parse::<u8>(),
+            cap[2].parse::<u8>(),
+            cap[3].parse::<i32>(),
+        ) {
+            return json!({
+                "day": day,
+                "month": month,
+                "year": year
+            });
         }
-        index += 1;
     }
-
     json!({})
 }
 
@@ -613,39 +725,15 @@ fn extract_color(line: &str) -> String {
 }
 
 fn extract_hex_color(line: &str) -> Option<String> {
-    let chars: Vec<char> = line.chars().collect();
-    let mut index = 0;
-
-    while index < chars.len() {
-        if chars[index] == '#' {
-            let start = index + 1;
-            let mut end = start;
-            while end < chars.len() && chars[end].is_ascii_hexdigit() {
-                end += 1;
-            }
-
-            if end - start >= 6 {
-                let mut color: String = chars[start..start + 6].iter().collect();
-                if end - start >= 8 {
-                    color.push_str(&chars[start + 6..start + 8].iter().collect::<String>());
-                }
-                return Some(color.to_ascii_lowercase());
-            }
-        }
-        index += 1;
-    }
-
-    None
+    let re = Regex::new(r"#([0-9a-fA-F]{6,8})").unwrap();
+    re.captures(line).map(|cap| cap[1].to_ascii_lowercase())
 }
 
 fn extract_rgb_like(line: &str, name: &str) -> Option<String> {
-    let start = line.find(&format!("{name}("))?;
-    let args_start = start + name.len() + 1;
-    let args_end = line[args_start..].find(')')? + args_start;
-    let args: Vec<&str> = line[args_start..args_end]
-        .split(',')
-        .map(str::trim)
-        .collect();
+    let re_str = format!(r"{}\(([^)]+)\)", name);
+    let re = Regex::new(&re_str).unwrap();
+    let cap = re.captures(line)?;
+    let args: Vec<&str> = cap[1].split(',').map(str::trim).collect();
 
     if (name == "rgb" && args.len() != 3) || (name == "rgba" && args.len() != 4) {
         return None;
@@ -669,83 +757,15 @@ fn extract_rgb_like(line: &str, name: &str) -> Option<String> {
 }
 
 fn extract_links(line: &str) -> Vec<Vec<String>> {
-    let mut links = Vec::new();
-    let mut rest = line;
-
-    while let Some(title_start) = rest.find('[') {
-        let after_title_start = &rest[title_start + 1..];
-        let Some(title_end) = after_title_start.find(']') else {
-            break;
-        };
-        let title = &after_title_start[..title_end];
-        let after_title = &after_title_start[title_end + 1..];
-
-        if !after_title.starts_with('(') {
-            rest = after_title;
-            continue;
-        }
-
-        let Some(url_end) = after_title[1..].find(')') else {
-            break;
-        };
-        let url = &after_title[1..url_end + 1];
-        links.push(vec![title.to_string(), url.to_string()]);
-        rest = &after_title[url_end + 2..];
-    }
-
-    links
+    let re = Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").unwrap();
+    re.captures_iter(line)
+        .map(|cap| vec![cap[1].to_string(), cap[2].to_string()])
+        .collect()
 }
 
 fn remove_links(line: &str) -> String {
-    let mut output = String::new();
-    let mut rest = line;
-
-    while let Some(title_start) = rest.find('[') {
-        let before = &rest[..title_start];
-        let after_title_start = &rest[title_start + 1..];
-        let Some(title_end) = after_title_start.find(']') else {
-            break;
-        };
-        let after_title = &after_title_start[title_end + 1..];
-
-        if !after_title.starts_with('(') {
-            output.push_str(before);
-            output.push('[');
-            rest = after_title_start;
-            continue;
-        }
-
-        let Some(url_end) = after_title[1..].find(')') else {
-            break;
-        };
-
-        output.push_str(before);
-        rest = &after_title[url_end + 2..];
-    }
-
-    output.push_str(rest);
-    output
-}
-
-fn remove_rgb_functions(line: &str) -> String {
-    let mut output = line.to_string();
-    for name in ["rgba", "rgb"] {
-        while let Some(start) = output.find(&format!("{name}(")) {
-            let Some(end) = output[start..].find(')') else {
-                break;
-            };
-            output.replace_range(start..start + end + 1, "");
-        }
-    }
-    output
-}
-
-fn is_word_char(ch: char) -> bool {
-    ch == '_' || ch.is_ascii_alphanumeric()
-}
-
-fn is_due_char(ch: char) -> bool {
-    ch.is_ascii_digit() || ch == '/'
+    let re = Regex::new(r"\[[^\]]+\]\([^)]+\)").unwrap();
+    re.replace_all(line, "").into_owned()
 }
 
 fn clamp(value: i64, min: i64, max: i64) -> i64 {
@@ -761,32 +781,37 @@ mod tests {
     use super::Lexer;
     use serde_json::Value;
 
+    macro_rules! assert_eq_code {
+        ($left:expr, $right:expr, $lang:expr) => {
+            if $left != $right {
+                panic!(
+                    "\n====================\nResult:\n\n```{lang}\n{result}\n```\n--------------------\nWhat was expected:\n\n```{lang}\n{expected}\n```\n====================\n",
+                    lang = $lang,
+                    result = $left,
+                    expected = $right
+                );
+            }
+        };
+    }
+
     #[test]
     fn parses_board_example_correctly() {
-        let source = include_str!("../../../examples/board/example.bd");
+        let source = include_str!("../../../test/board/example.bd");
         let expected: Value =
-            serde_json::from_str(include_str!("../../../examples/board/example.json")).unwrap();
+            serde_json::from_str(include_str!("../../../test/board/example.json")).unwrap();
 
-        let parsed = Lexer::new(source).get_json(false, false).unwrap();
+        let parsed = Lexer::new(source).get_json(false, false);
 
-        assert_eq!(parsed, expected);
+        assert_eq_code!(parsed, expected, "json");
     }
 
     #[test]
     fn creates_clear_code_correctly() {
-        let source = include_str!("../../../examples/board/example.bd");
-        let expected: Value =
-            serde_json::from_str(include_str!("../../../examples/board/example_cleaned.bd"))
-                .unwrap();
+        let source = include_str!("../../../test/board/example.bd");
+        let expected = include_str!("../../../test/board/example_cleaned.bd");
 
-        let parsed = Lexer::new(source).clear_code(false).unwrap();
+        let parsed = Lexer::new(source).clear_code(false);
 
-        assert_eq!(parsed, expected);
+        assert_eq_code!(parsed, expected, "bd");
     }
-}
-
-fn remove_inline_comments(mut s: String) -> String {
-    let re = Regex::new(r#""inline_comment"\s*:\s*"[^"]*",?"#).unwrap();
-    s = re.replace_all(&s, "").to_string();
-    s
 }

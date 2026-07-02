@@ -27,44 +27,37 @@ struct Cli {
     #[arg(short = 'u', long = "update")]
     update: bool,
 
-    /// Shows config location
-    #[arg(short = 'c', long = "config")]
+    /// Shows config directory
+    #[arg(long = "config-dir")]
     config: bool,
+
+    /// Clears code
+    #[arg(short = 'c', long = "clear-code")]
+    clear_code: bool,
 }
 
 fn main() {
-    println!("{}", board::test());
-
     let args = Cli::parse();
-    let pattern = "test";
 
     if args.lexer {
-        if let Some(path) = &args.path {
-            if path.as_os_str().is_empty() {
-                eprintln!("NO PATH PROVIDED");
-                std::process::exit(1);
-            } else {
-                let content = std::fs::read_to_string(&path).expect("could not read file");
+        let content = get_file_contents(&args);
 
-                let lexer = board::Lexer::new(&content);
-                let json = lexer.get_json(false, false);
-                println!("{:?}", serde_json::to_string(&json));
-            }
-        }
+        let lexer = board::Lexer::new(&content);
+        let json = lexer.get_json(false, false);
+
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json).expect("failed to serialize JSON")
+        );
     }
 
-    if let Some(path) = &args.path {
-        if path.as_os_str().is_empty() {
-            eprintln!("NO PATH PROVIDED");
-        } else {
-            let content = std::fs::read_to_string(&path).expect("could not read file");
+    if args.clear_code {
+        let content = get_file_contents(&args);
 
-            for line in content.lines() {
-                if line.contains(pattern) {
-                    println!("{}", line);
-                }
-            }
-        }
+        let lexer = board::Lexer::new(&content);
+        let code = lexer.clear_code(false);
+
+        println!("{}", code);
     }
 
     if args.config {
@@ -95,6 +88,28 @@ fn get_config_path() -> String {
         return "C:\\Users\\.config\\board-lang".to_string();
     } else {
         return "~/.config/board-lang".to_string();
+    }
+}
+
+fn get_file_contents(args: &Cli) -> String {
+    if let Some(path) = &args.path {
+        if path.as_os_str().is_empty() {
+            eprintln!("NO PATH PROVIDED");
+            std::process::exit(1);
+        } else if !path.exists() || !path.is_file() {
+            eprintln!("FILE NOT FOUND");
+            std::process::exit(1);
+        } else {
+            let contents = std::fs::read_to_string(&path).expect("could not read file");
+            if contents.trim().is_empty() || contents == "could not read file" {
+                eprintln!("FILE IS EMPTY");
+                std::process::exit(1);
+            }
+            contents
+        }
+    } else {
+        eprintln!("NO PATH PROVIDED");
+        std::process::exit(1);
     }
 }
 

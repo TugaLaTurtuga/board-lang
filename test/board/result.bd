@@ -1,0 +1,25 @@
+[PROFILES]
+Git
+Work // comment-1
+// comment-2
+// comment-3
+// comment-4
+
+[BOARDS]
+// comment-5
+To do #911db4
+Bug #b41d1d +code
+Doing #c2bf1e
+Done #22b41d
+// comment-6
+// comment-7
+// comment-8
+
+[TASKS]
+** To do - Do the dishes #ffffff +kitchen @house !24/05/26 [How to do it](https://howtododishes.com/) [What to do](./test.md)
+* Doing - Programming #1d43b4 +Computer // comment-9
+11* Done - Presentation #ff0000 @School !11/05/26
+// NEW SYNTAX TO COME:
+// **To do - Do the dishes +kitchen @house !24/5/2026 16:10 - 17:10 #ffffff [How to do it](https://howtododishes.com/) [What to do](./test.md)
+// *Doing - Programming +Computer #1d43b4 !14:30 - 4hrs
+// ***********Done - Presentation @School rgb(255, 0, 0) !11/5/2026 - 15/5/2026

@@ -6,6 +6,18 @@ DESCRIPTION_MD="$2"
 PRE_RELEASE_LABEL="$3"
 IS_PRE_RELEASE=false
 
+GREEN='\033[38;5;40m'
+RED='\x1b[31m'
+RESET='\033[0m'
+
+log() {
+  echo -e "\n${GREEN}[PROGRAM] $1${RESET}"
+}
+
+error() {
+  echo -e "\n\n\n${RED}[ERROR] $1${RESET}"
+}
+
 if [[ -z "$NEW_VERSION" || -z "$DESCRIPTION_MD" ]]; then
   echo -e "Usage:\n  $0 \"<version>\" \"<description.md>\" [--pre-release]"
   exit 1
@@ -29,7 +41,36 @@ if [[ "$NEW_VERSION" == v* ]]; then
   NEW_VERSION="${NEW_VERSION#v}"
 fi
 
-echo "Updating version to: $NEW_VERSION"
+# Checks if version is already in use
+WEBSITE_VERSION_FILE="../home/docs/board/json/versions.json"
+
+TODAY_YEAR=$(date +%Y)
+TODAY_MONTH=$(date +%-m)
+TODAY_DAY=$(date +%-d)
+
+# Check if version already exists and put it in website JSON
+if jq -e --arg version "$NEW_VERSION" \
+  '.[] | select(.version == $version)' \
+  "$WEBSITE_VERSION_FILE" > /dev/null; then
+  error "Version '$NEW_VERSION' already exists!"
+  exit 1
+fi
+
+# Checks if it pasts the tests
+log "Running tests..."
+
+run_cargo_test() {
+  cargo test "$@" || { error "Tests failed!"; exit 1; }
+}
+
+run_cargo_test
+run_cargo_test --lib -p board_lexer
+run_cargo_test --lib -p board_website
+run_cargo_test --lib -p board_settings
+
+log "Tests passed!"
+
+log "Updating version to: $NEW_VERSION"
 
 update_cargo_toml() {
   local file="$1"
@@ -40,13 +81,14 @@ update_cargo_toml() {
 update_cargo_toml Cargo.toml
 update_cargo_toml dependencies/lexer/Cargo.toml
 update_cargo_toml dependencies/website/Cargo.toml
+update_cargo_toml dependencies/settings/Cargo.toml
 
 # -----------------------
 # Commit core repo
 # -----------------------
 commit_changes() {
   if [[ -n "$(git status --porcelain)" ]]; then
-    git add Cargo.toml dependencies/lexer/Cargo.toml dependencies/website/Cargo.toml
+    git add Cargo.toml dependencies/lexer/Cargo.toml dependencies/website/Cargo.toml dependencies/settings/Cargo.toml
 
     git commit -m "chore: release v$NEW_VERSION" -m "$DESCRIPTION_MD"
   fi
@@ -85,11 +127,6 @@ create_release() {
 # -----------------------
 # Update website JSON
 # -----------------------
-WEBSITE_VERSION_FILE="../home/docs/board/json/versions.json"
-
-TODAY_YEAR=$(date +%Y)
-TODAY_MONTH=$(date +%-m)
-TODAY_DAY=$(date +%-d)
 
 NEW_ENTRY=$(jq -n \
   --arg version "$NEW_VERSION" \
@@ -114,10 +151,21 @@ commit_website() {
 }
 
 # -----------------------
+# Create Markdown map
+# -----------------------
+
+create_markdown_map() {
+  echo "Creating Markdown map"
+  MARKDOWN_MAP_FILE="docs/map.json"
+}
+
+# -----------------------
 # Run pipeline
 # -----------------------
+
 # commit_changes
 # create_release
 # commit_website
+# create_markdown_map
 
 echo "Release process complete"
