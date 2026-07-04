@@ -8,6 +8,7 @@ use serde_json::{
 };
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fmt::Write;
 
 pub struct Lexer<'a> {
     input: &'a str,
@@ -52,12 +53,79 @@ impl<'a> Lexer<'a> {
     pub fn get_json(&self, ignore_whitespace: bool, ignore_comments: bool) -> Value {
         let sections = split_sections(&&self.tokenize(ignore_whitespace, ignore_comments));
 
+        let mut boards = parse_boards(sections.get("BOARDS"));
+        let tasks = parse_tasks(sections.get("TASKS"));
+
+        let mut board_labels = HashSet::new();
+        for board in &boards {
+            if let Some(label) = board.get("label").and_then(|l| l.as_str()) {
+                board_labels.insert(label.to_string());
+            }
+        }
+
+        let mut added_boards = Vec::new();
+        for task in &tasks {
+            if let Some(board) = task.get("board").and_then(|b| b.as_str()) {
+                if !board.is_empty()
+                    && !board_labels.contains(board)
+                    && !added_boards.iter().any(|b| b == board)
+                {
+                    added_boards.push(board.to_string());
+                }
+            }
+        }
+
+        let last_index = added_boards.len().saturating_sub(1);
+        for (i, board_name) in added_boards.iter().enumerate() {
+            let mut entry = Map::new();
+            entry.insert("label".to_string(), json!(board_name));
+            entry.insert(
+                "inline_comment".to_string(),
+                json!("[Lexer]: Added this line"),
+            );
+            boards.push(Value::Object(entry));
+
+            if i == last_index {
+                boards.push(empty());
+            }
+        }
+
+        let mut board_order = HashMap::new();
+        let mut index = 0;
+        for board in &boards {
+            if let Some(label) = board.get("label").and_then(|l| l.as_str()) {
+                if !board_order.contains_key(label) {
+                    board_order.insert(label.to_string(), index);
+                    index += 1;
+                }
+            }
+        }
+
+        let mut sortable_tasks = Vec::new();
+        let mut other_tasks = Vec::new();
+
+        for task in tasks {
+            if task.is_object() && task.get("board").and_then(|b| b.as_str()).is_some() {
+                sortable_tasks.push(task);
+            } else {
+                other_tasks.push(task);
+            }
+        }
+
+        sortable_tasks.sort_by_key(|task| {
+            let board_name = task.get("board").and_then(|b| b.as_str()).unwrap_or("");
+            board_order.get(board_name).cloned().unwrap_or(usize::MAX)
+        });
+
+        let mut final_tasks = sortable_tasks;
+        final_tasks.extend(other_tasks);
+
         json!({
             "profiles": parse_profiles(sections.get("PROFILES")),
             "tags": {},
             "context": {},
-            "boards": parse_boards(sections.get("BOARDS")),
-            "tasks": parse_tasks(sections.get("TASKS")),
+            "boards": boards,
+            "tasks": final_tasks,
         })
     }
 
@@ -68,9 +136,7 @@ impl<'a> Lexer<'a> {
     }
 }
 
-/// Creates code from json,
-/// check ../test/board/example.json, ../test/board/example.bd and ../test/board/example_cleaned.bd
-/// for examples
+/// Creates code from json
 pub fn create_code_from_json(
     json: Value,
     ignore_whitespaces: bool,
@@ -78,6 +144,7 @@ pub fn create_code_from_json(
 ) -> String {
     // Create code based on json
     let mut code = String::new();
+    let mut new_line;
 
     // Ensure `profiles` is an array
     code.push_str("[PROFILES]\n");
@@ -95,27 +162,31 @@ pub fn create_code_from_json(
                 // Comment
                 else if let Some(comment) = obj.get("comment").and_then(Value::as_str) {
                     if !ignore_comments {
-                        code.push_str("// ");
-                        code.push_str(comment);
-                        code.push('\n');
+                        write!(code, "// {}\n", comment).unwrap();
                     }
                     continue;
                 }
 
+                new_line = String::new();
+
                 // Label
                 if let Some(label) = obj.get("label").and_then(Value::as_str) {
-                    code.push_str(label);
+                    new_line.push_str(label);
                 }
 
                 // Inline comment
                 if let Some(inline) = obj.get("inline_comment").and_then(Value::as_str)
                     && !ignore_comments
                 {
-                    code.push_str(" // ");
-                    code.push_str(inline.trim());
+                    if inline == "[Lexer]: Added this line"
+                        && !code.ends_with("// [Lexer]: Added this line\n")
+                    {
+                        code.push_str("\n");
+                    }
+                    write!(new_line, " // {}", inline).unwrap();
                 }
 
-                code.push('\n');
+                write!(code, "{}\n", new_line.trim()).unwrap();
             }
         }
     }
@@ -135,35 +206,37 @@ pub fn create_code_from_json(
                 // Comment
                 else if let Some(comment) = obj.get("comment").and_then(Value::as_str) {
                     if !ignore_comments {
-                        code.push_str("// ");
-                        code.push_str(comment);
-                        code.push('\n');
+                        write!(code, "// {}\n", comment).unwrap();
                     }
                     continue;
                 }
 
-                let mut line_str = String::new();
+                new_line = String::new();
 
                 // Priority
                 if let Some(priority) = obj.get("priority").and_then(Value::as_u64) {
                     let priority_str = insert_priority(priority);
                     if !priority_str.is_empty() {
-                        line_str.push_str(&priority_str);
-                        line_str.push_str(" ");
+                        write!(new_line, "{} ", priority_str).unwrap();
                     }
                 }
 
                 // Board
                 if let Some(label) = obj.get("label").and_then(Value::as_str) {
-                    line_str.push_str(label);
-                    line_str.push_str(" ");
+                    if let Some(finish_place) = obj.get("finish place").and_then(Value::as_bool) {
+                        if finish_place {
+                            write!(new_line, "<{}> ", label).unwrap();
+                        } else {
+                            write!(new_line, "{} ", label).unwrap();
+                        }
+                    } else {
+                        write!(new_line, "{} ", label).unwrap();
+                    }
                 }
 
                 // Color
                 if let Some(color) = obj.get("color").and_then(Value::as_str) {
-                    line_str.push_str("#");
-                    line_str.push_str(color);
-                    line_str.push_str(" ");
+                    write!(new_line, "#{} ", color).unwrap();
                 }
 
                 // Tags
@@ -173,9 +246,7 @@ pub fn create_code_from_json(
                     for tag in tags {
                         if let Some(value) = tag.as_str() {
                             if !value.is_empty() && seen.insert(value) {
-                                line_str.push_str("+");
-                                line_str.push_str(value);
-                                line_str.push_str(" ");
+                                write!(new_line, "+{} ", value).unwrap();
                             }
                         }
                     }
@@ -188,9 +259,7 @@ pub fn create_code_from_json(
                     for context in contexts {
                         if let Some(value) = context.as_str() {
                             if !value.is_empty() && seen.insert(value) {
-                                line_str.push_str("@");
-                                line_str.push_str(value);
-                                line_str.push_str(" ");
+                                write!(new_line, "@{} ", value).unwrap();
                             }
                         }
                     }
@@ -212,9 +281,12 @@ pub fn create_code_from_json(
                     }
 
                     if day != 0 || month != 0 || year != 0 {
-                        line_str.push_str("!");
-                        line_str.push_str(&board_settings::format_date(day, month, year));
-                        line_str.push_str(" ");
+                        write!(
+                            new_line,
+                            "!{} ",
+                            &board_settings::format_date(day, month, year)
+                        )
+                        .unwrap();
                     }
                 }
 
@@ -229,11 +301,7 @@ pub fn create_code_from_json(
                                 let link = arr[1].as_str().unwrap_or("");
 
                                 if !name.is_empty() && seen.insert(name.to_string()) {
-                                    line_str.push_str("[");
-                                    line_str.push_str(name);
-                                    line_str.push_str("](");
-                                    line_str.push_str(link);
-                                    line_str.push_str(") ");
+                                    write!(new_line, "[{}]({}) ", name, link).unwrap();
                                 }
                             }
                         }
@@ -244,18 +312,21 @@ pub fn create_code_from_json(
                 if let Some(inline) = obj.get("inline_comment").and_then(Value::as_str)
                     && !ignore_comments
                 {
-                    line_str.push_str("// ");
-                    line_str.push_str(inline);
+                    if inline == "[Lexer]: Added this line"
+                        && !code.ends_with("// [Lexer]: Added this line\n")
+                    {
+                        code.push_str("\n");
+                    }
+                    write!(new_line, "// {}", inline).unwrap();
                 }
 
-                line_str = line_str.trim().to_string();
-                line_str.push_str("\n");
-                code.push_str(&line_str);
+                write!(code, "{}\n", new_line.trim()).unwrap();
             }
         }
     }
 
     code.push_str("\n[TASKS]\n");
+    let mut curr_board = String::new();
     if let Some(tasks) = json.get("tasks").and_then(Value::as_array) {
         for line in tasks {
             // Each line must be an object
@@ -270,41 +341,40 @@ pub fn create_code_from_json(
                 // Comment
                 else if let Some(comment) = obj.get("comment").and_then(Value::as_str) {
                     if !ignore_comments {
-                        code.push_str("// ");
-                        code.push_str(comment);
-                        code.push('\n');
+                        write!(code, "// {}\n", comment).unwrap();
                     }
                     continue;
                 }
 
-                let mut line_str = String::new();
+                new_line = String::new();
 
                 // Priority
                 if let Some(priority) = obj.get("priority").and_then(Value::as_u64) {
                     let priority_str = insert_priority(priority);
                     if !priority_str.is_empty() {
-                        line_str.push_str(&priority_str);
-                        line_str.push_str(" ");
+                        write!(new_line, "{} ", &priority_str).unwrap();
                     }
                 }
 
                 // Board
                 if let Some(board) = obj.get("board").and_then(Value::as_str) {
-                    line_str.push_str(board);
-                    line_str.push_str(" - ");
+                    if curr_board.is_empty() {
+                        curr_board = board.to_string();
+                    } else if curr_board != board {
+                        curr_board = board.to_string();
+                        code.push_str("\n");
+                    }
+                    write!(new_line, "{} - ", board).unwrap();
                 }
 
                 // Label
                 if let Some(label) = obj.get("label").and_then(Value::as_str) {
-                    line_str.push_str(label);
-                    line_str.push_str(" ");
+                    write!(new_line, "{} ", label).unwrap();
                 }
 
                 // Color
                 if let Some(color) = obj.get("color").and_then(Value::as_str) {
-                    line_str.push_str("#");
-                    line_str.push_str(color);
-                    line_str.push_str(" ");
+                    write!(new_line, "#{} ", color).unwrap();
                 }
 
                 // Tags
@@ -314,9 +384,7 @@ pub fn create_code_from_json(
                     for tag in tags {
                         if let Some(value) = tag.as_str() {
                             if !value.is_empty() && seen.insert(value) {
-                                line_str.push_str("+");
-                                line_str.push_str(value);
-                                line_str.push_str(" ");
+                                write!(new_line, "+{} ", value).unwrap();
                             }
                         }
                     }
@@ -329,9 +397,7 @@ pub fn create_code_from_json(
                     for context in contexts {
                         if let Some(value) = context.as_str() {
                             if !value.is_empty() && seen.insert(value) {
-                                line_str.push_str("@");
-                                line_str.push_str(value);
-                                line_str.push_str(" ");
+                                write!(new_line, "@{} ", value).unwrap();
                             }
                         }
                     }
@@ -353,9 +419,12 @@ pub fn create_code_from_json(
                     }
 
                     if day != 0 || month != 0 || year != 0 {
-                        line_str.push_str("!");
-                        line_str.push_str(&board_settings::format_date(day, month, year));
-                        line_str.push_str(" ");
+                        write!(
+                            new_line,
+                            "!{} ",
+                            &board_settings::format_date(day, month, year)
+                        )
+                        .unwrap();
                     }
                 }
 
@@ -370,11 +439,7 @@ pub fn create_code_from_json(
                                 let link = arr[1].as_str().unwrap_or("");
 
                                 if !name.is_empty() && seen.insert(name.to_string()) {
-                                    line_str.push_str("[");
-                                    line_str.push_str(name);
-                                    line_str.push_str("](");
-                                    line_str.push_str(link);
-                                    line_str.push_str(") ");
+                                    write!(new_line, "[{}]({}) ", name, link).unwrap();
                                 }
                             }
                         }
@@ -385,13 +450,15 @@ pub fn create_code_from_json(
                 if let Some(inline) = obj.get("inline_comment").and_then(Value::as_str)
                     && !ignore_comments
                 {
-                    line_str.push_str("// ");
-                    line_str.push_str(inline);
+                    if inline == "[Lexer]: Added this line"
+                        && !code.ends_with("// [Lexer]: Added this line\n")
+                    {
+                        code.push_str("\n");
+                    }
+                    write!(new_line, "// {}", inline).unwrap();
                 }
 
-                line_str = line_str.trim().to_string();
-                line_str.push_str("\n");
-                code.push_str(&line_str);
+                write!(code, "{}\n", new_line.trim()).unwrap();
             }
         }
     }
@@ -427,14 +494,37 @@ fn split_sections(lines: &[String]) -> HashMap<String, Vec<String>> {
                     sections
                         .entry(section.clone())
                         .or_default()
-                        .push(format!("//{comment}"));
+                        .push(format!("// {comment}"));
                 }
             }
 
             if header.ends_with(']') {
-                let name = header.trim_matches(&['[', ']'][..]).to_ascii_uppercase();
-                current = Some(name.clone());
-                sections.entry(name).or_default();
+                let mut name = header.trim_matches(&['[', ']'][..]).to_ascii_uppercase();
+
+                if !name.is_empty() {
+                    if name == "PROFILE" {
+                        name = "PROFILES".to_string();
+                    } else if name == "BOARD" {
+                        name = "BOARDS".to_string();
+                    } else if name == "TASK" {
+                        name = "TASKS".to_string();
+                    }
+
+                    if name == "PROFILES" || name == "BOARDS" || name == "TASKS" {
+                        current = Some(name.clone());
+                        sections.entry(name).or_default();
+                    } else if let Some(section) = &current {
+                        sections
+                            .entry(section.clone())
+                            .or_default()
+                            .push(line.to_string());
+                    }
+                } else if let Some(section) = &current {
+                    sections
+                        .entry(section.clone())
+                        .or_default()
+                        .push(line.to_string());
+                }
             }
         } else if let Some(section) = &current {
             sections
@@ -488,15 +578,20 @@ fn parse_profiles(lines: Option<&Vec<String>>) -> Vec<Value> {
 fn parse_boards(lines: Option<&Vec<String>>) -> Vec<Value> {
     let mut boards_object = Vec::new();
     let mut seen_labels: HashSet<String> = HashSet::new();
+    let mut needs_finish_place = true;
 
     for line in lines.into_iter().flatten() {
         let line = line.trim();
+
+        // empty line → empty value (still counts as something)
         if line.is_empty() {
             boards_object.push(empty());
             continue;
         }
 
         let mut entry = Map::new();
+
+        // full-line comment
         if full_line_comment(line) {
             entry.insert("comment".to_string(), json!(line[2..].trim()));
             boards_object.push(Value::Object(entry));
@@ -504,7 +599,9 @@ fn parse_boards(lines: Option<&Vec<String>>) -> Vec<Value> {
         }
 
         let links = extract_links(line);
-        entry.insert("links".to_string(), json!(links));
+        if !links.is_empty() {
+            entry.insert("links".to_string(), json!(links));
+        }
 
         let line = remove_links(line);
         let (line, comment) = extract_inline_comment(&line);
@@ -521,23 +618,60 @@ fn parse_boards(lines: Option<&Vec<String>>) -> Vec<Value> {
 
         let label = board_label(&line);
         if !seen_labels.insert(label.clone()) {
-            continue; // already has the same label
+            continue; // duplicate label
         }
 
-        entry.insert("label".to_string(), json!(label));
-        entry.insert(
-            "tags".to_string(),
-            json!(extract_prefixed_words(&line, '+')),
-        );
-        entry.insert(
-            "contexts".to_string(),
-            json!(extract_prefixed_words(&line, '@')),
-        );
-        entry.insert("due".to_string(), extract_due(&line));
-        entry.insert("color".to_string(), json!(extract_color(&line)));
-        entry.insert("finish place".to_string(), json!(false)); // TODO
+        if needs_finish_place && label.starts_with("<") && label.ends_with(">") {
+            entry.insert("label".to_string(), json!(label[1..label.len() - 1].trim()));
+            entry.insert("finish place".to_string(), json!(true));
+            needs_finish_place = false;
+        } else {
+            entry.insert("label".to_string(), json!(label));
+        }
 
-        boards_object.push(Value::Object(entry));
+        let tags = extract_prefixed_words(&line, '+');
+        if !tags.is_empty() {
+            entry.insert("tags".to_string(), json!(tags));
+        }
+
+        let contexts = extract_prefixed_words(&line, '@');
+        if !contexts.is_empty() {
+            entry.insert("contexts".to_string(), json!(contexts));
+        }
+
+        let due = extract_due(&line);
+        if !due.is_null() {
+            entry.insert("due".to_string(), due);
+        }
+
+        let color = extract_color(&line);
+        if !color.is_empty() {
+            entry.insert("color".to_string(), json!(color));
+        }
+
+        // only insert if there's something besides priority / label
+        let meaningful = entry.keys().any(|k| k != "priority" && k != "label");
+
+        if meaningful {
+            boards_object.push(Value::Object(entry));
+        }
+    }
+
+    if needs_finish_place {
+        // check the last object with a "label" and set finish place if found
+        for board in boards_object.iter_mut().rev() {
+            if board.as_object().and_then(|o| o.get("label")).is_some() {
+                board
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("finish place".to_string(), json!(true));
+                break;
+            }
+        }
+    }
+
+    if boards_object.last() != Some(&empty()) {
+        boards_object.push(empty());
     }
 
     boards_object
@@ -548,12 +682,15 @@ fn parse_tasks(lines: Option<&Vec<String>>) -> Vec<Value> {
 
     for line in lines.into_iter().flatten() {
         let line = line.trim();
+
         if line.is_empty() {
             tasks.push(empty());
             continue;
         }
 
         let mut entry = Map::new();
+
+        // full-line comment always counts
         if full_line_comment(line) {
             entry.insert("comment".to_string(), json!(line[2..].trim()));
             tasks.push(Value::Object(entry));
@@ -561,7 +698,9 @@ fn parse_tasks(lines: Option<&Vec<String>>) -> Vec<Value> {
         }
 
         let links = extract_links(line);
-        entry.insert("links".to_string(), json!(links));
+        if !links.is_empty() {
+            entry.insert("links".to_string(), json!(links));
+        }
 
         let line = remove_links(line);
         let (line, comment) = extract_inline_comment(&line);
@@ -580,18 +719,35 @@ fn parse_tasks(lines: Option<&Vec<String>>) -> Vec<Value> {
 
         entry.insert("board".to_string(), json!(board));
         entry.insert("label".to_string(), json!(extract_label(&line)));
-        entry.insert(
-            "tags".to_string(),
-            json!(extract_prefixed_words(&line, '+')),
-        );
-        entry.insert(
-            "contexts".to_string(),
-            json!(extract_prefixed_words(&line, '@')),
-        );
-        entry.insert("due".to_string(), extract_due(&line));
-        entry.insert("color".to_string(), json!(extract_color(&line)));
 
-        tasks.push(Value::Object(entry));
+        let tags = extract_prefixed_words(&line, '+');
+        if !tags.is_empty() {
+            entry.insert("tags".to_string(), json!(tags));
+        }
+
+        let contexts = extract_prefixed_words(&line, '@');
+        if !contexts.is_empty() {
+            entry.insert("contexts".to_string(), json!(contexts));
+        }
+
+        let due = extract_due(&line);
+        if !due.is_null() {
+            entry.insert("due".to_string(), due);
+        }
+
+        let color = extract_color(&line);
+        if !color.is_empty() {
+            entry.insert("color".to_string(), json!(color));
+        }
+
+        // only insert if there's something besides priority / label / board
+        let meaningful = entry
+            .keys()
+            .any(|k| k != "priority" && k != "label" && k != "board");
+
+        if meaningful {
+            tasks.push(Value::Object(entry));
+        }
     }
 
     tasks
@@ -709,7 +865,7 @@ fn extract_due(line: &str) -> Value {
             });
         }
     }
-    json!({})
+    Value::Null
 }
 
 fn extract_color(line: &str) -> String {
@@ -784,21 +940,68 @@ mod tests {
     macro_rules! assert_eq_code {
         ($left:expr, $right:expr, $lang:expr) => {
             if $left != $right {
+                let (result, expected) = if $lang == "json" {
+                    (
+                        serde_json::to_string_pretty(&$left).unwrap(),
+                        serde_json::to_string_pretty(&$right).unwrap(),
+                    )
+                } else {
+                    (format!("{}", $left), format!("{}", $right))
+                };
+
+                let diff = diff_lines(&result, &expected);
+
                 panic!(
-                    "\n====================\nResult:\n\n```{lang}\n{result}\n```\n--------------------\nWhat was expected:\n\n```{lang}\n{expected}\n```\n====================\n",
+                    "\n====================\n\
+                     Result (with diff):\n\n\
+                     ```{lang}\n{diff}\n```\n\
+                     --------------------\n\
+                     Expected:\n\n\
+                     ```{lang}\n{expected}\n```\n\
+                     ====================\n",
                     lang = $lang,
-                    result = $left,
-                    expected = $right
+                    diff = diff,
+                    expected = expected
                 );
             }
         };
+    }
+
+    fn diff_lines(left: &str, right: &str) -> String {
+        let left_lines: Vec<&str> = left.lines().collect();
+        let right_lines: Vec<&str> = right.lines().collect();
+
+        let mut out = String::new();
+        let max = left_lines.len().max(right_lines.len());
+
+        for i in 0..max {
+            match (left_lines.get(i), right_lines.get(i)) {
+                (Some(l), Some(r)) if l == r => {
+                    out.push_str(l);
+                }
+                (Some(l), Some(_r)) => {
+                    out.push_str(&format!("\x1b[31m{}  -> diff here\x1b[0m", l));
+                }
+                (None, Some(r)) => {
+                    out.push_str(&format!("\x1b[31m-- line should be here --\n{}\x1b[0m", r));
+                    continue;
+                }
+                (Some(l), None) => {
+                    out.push_str(&format!("\x1b[31m{}  -> line shouldn't exist\x1b[0m", l));
+                }
+                (None, None) => {}
+            }
+            out.push('\n');
+        }
+
+        out
     }
 
     #[test]
     fn parses_board_example_correctly() {
         let source = include_str!("../../../test/board/example.bd");
         let expected: Value =
-            serde_json::from_str(include_str!("../../../test/board/example.json")).unwrap();
+            serde_json::from_str(include_str!("../../../test/board/example.bdj")).unwrap();
 
         let parsed = Lexer::new(source).get_json(false, false);
 

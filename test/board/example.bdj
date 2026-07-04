@@ -29,42 +29,24 @@
     {
       "priority": 0,
       "label": "To do",
-      "tags": [],
-      "contexts": [],
-      "links": [],
-      "due": {},
-      "color": "911db4",
-      "finish place": false
+      "color": "911db4"
     },
     {
       "priority": 0,
       "label": "Bug",
       "tags": ["code"],
-      "contexts": [],
-      "links": [],
-      "due": {},
-      "color": "b41d1d",
-      "finish place": false
+      "color": "b41d1d"
     },
     {
       "priority": 0,
       "label": "Doing",
-      "tags": [],
-      "contexts": [],
-      "links": [],
-      "due": {},
-      "color": "c2bf1e",
-      "finish place": false
+      "color": "c2bf1e"
     },
     {
       "priority": 0,
       "label": "Done",
-      "tags": [],
-      "contexts": [],
-      "links": [],
-      "due": {},
-      "color": "22b41d",
-      "finish place": false
+      "finish place": true,
+      "color": "22b41d"
     },
     {
       "comment": "comment-6"
@@ -86,6 +68,17 @@
     },
     {
       "__empty__": true
+    },
+    {
+      "__empty__": true
+    },
+    {
+      "label": "Testing",
+      "inline_comment": "[Lexer]: Added this line"
+    },
+    {
+      "label": "Testing2",
+      "inline_comment": "[Lexer]: Added this line"
     },
     {
       "__empty__": true
@@ -114,9 +107,6 @@
       "board": "Doing",
       "label": "Programming",
       "tags": ["Computer"],
-      "contexts": [],
-      "links": [],
-      "due": {},
       "color": "1d43b4",
       "inline_comment": "comment-9"
     },
@@ -124,9 +114,31 @@
       "priority": 11,
       "board": "Done",
       "label": "Presentation",
-      "tags": [],
       "contexts": ["School"],
-      "links": [],
+      "due": {
+        "day": 11,
+        "month": 5,
+        "year": 2026
+      },
+      "color": "ff0000"
+    },
+    {
+      "priority": 0,
+      "board": "Testing",
+      "label": "Presentation",
+      "contexts": ["School"],
+      "due": {
+        "day": 11,
+        "month": 5,
+        "year": 2026
+      },
+      "color": "ff0000"
+    },
+    {
+      "priority": 0,
+      "board": "Testing2",
+      "label": "Presentation",
+      "contexts": ["School"],
       "due": {
         "day": 11,
         "month": 5,

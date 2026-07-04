@@ -1,4 +1,3 @@
-use board_lexer as board;
 use clap::Parser;
 
 /// Search for a pattern in a file and display the lines that contain it.
@@ -42,7 +41,7 @@ fn main() {
     if args.lexer {
         let content = get_file_contents(&args);
 
-        let lexer = board::Lexer::new(&content);
+        let lexer = board_lexer::Lexer::new(&content);
         let json = lexer.get_json(false, false);
 
         println!(
@@ -54,7 +53,7 @@ fn main() {
     if args.clear_code {
         let content = get_file_contents(&args);
 
-        let lexer = board::Lexer::new(&content);
+        let lexer = board_lexer::Lexer::new(&content);
         let code = lexer.clear_code(false);
 
         println!("{}", code);
