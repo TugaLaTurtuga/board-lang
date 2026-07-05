@@ -18,6 +18,20 @@ error() {
   echo -e "\n\n\n${RED}[ERROR] $1${RESET}"
 }
 
+# Checks if it pasts the tests
+log "Running tests..."
+
+run_cargo_test() {
+  cargo test "$@" || { error "Tests failed!"; exit 1; }
+}
+
+run_cargo_test
+run_cargo_test --lib -p board_lexer
+run_cargo_test --lib -p board_website
+run_cargo_test --lib -p board_settings
+
+log "Tests passed!"
+
 if [[ -z "$NEW_VERSION" || -z "$DESCRIPTION_MD" ]]; then
   echo -e "Usage:\n  $0 \"<version>\" \"<description.md>\" [--pre-release]"
   exit 1
@@ -55,20 +69,6 @@ if jq -e --arg version "$NEW_VERSION" \
   error "Version '$NEW_VERSION' already exists!"
   exit 1
 fi
-
-# Checks if it pasts the tests
-log "Running tests..."
-
-run_cargo_test() {
-  cargo test "$@" || { error "Tests failed!"; exit 1; }
-}
-
-run_cargo_test
-run_cargo_test --lib -p board_lexer
-run_cargo_test --lib -p board_website
-run_cargo_test --lib -p board_settings
-
-log "Tests passed!"
 
 log "Updating version to: $NEW_VERSION"
 

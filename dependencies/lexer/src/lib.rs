@@ -19,7 +19,7 @@ impl<'a> Lexer<'a> {
         Self { input }
     }
 
-    pub fn tokenize(&self, ignore_whitespace: bool, ignore_comments: bool) -> Vec<String> {
+    fn tokenize(&self, ignore_whitespace: bool, ignore_comments: bool) -> Vec<String> {
         let mut tokens: Vec<String> = self.input.split('\n').map(String::from).collect();
 
         if ignore_whitespace || ignore_comments {
@@ -169,6 +169,26 @@ pub fn create_code_from_json(
 
                 new_line = String::new();
 
+                // Description
+                if let Some(description) = obj.get("description").and_then(Value::as_str) {
+                    let lines: Vec<&str> = description.split('\n').collect();
+                    let last_i = lines.len().saturating_sub(1);
+
+                    for (i, line) in lines.iter().enumerate() {
+                        if i == 0 {
+                            if i == last_i {
+                                write!(code, "\n/// {}", line).unwrap();
+                            } else {
+                                write!(code, "\n/// {}\n", line).unwrap();
+                            }
+                        } else if i == last_i {
+                            write!(code, "/// {}", line).unwrap();
+                        } else if !line.trim().is_empty() {
+                            write!(code, "/// {}\n", line).unwrap();
+                        }
+                    }
+                }
+
                 // Label
                 if let Some(label) = obj.get("label").and_then(Value::as_str) {
                     new_line.push_str(label);
@@ -212,6 +232,26 @@ pub fn create_code_from_json(
                 }
 
                 new_line = String::new();
+
+                // Description
+                if let Some(description) = obj.get("description").and_then(Value::as_str) {
+                    let lines: Vec<&str> = description.split('\n').collect();
+                    let last_i = lines.len().saturating_sub(1);
+
+                    for (i, line) in lines.iter().enumerate() {
+                        if i == 0 {
+                            if i == last_i {
+                                write!(code, "\n/// {}", line).unwrap();
+                            } else {
+                                write!(code, "\n/// {}\n", line).unwrap();
+                            }
+                        } else if i == last_i {
+                            write!(code, "/// {}", line).unwrap();
+                        } else if !line.trim().is_empty() {
+                            write!(code, "/// {}\n", line).unwrap();
+                        }
+                    }
+                }
 
                 // Priority
                 if let Some(priority) = obj.get("priority").and_then(Value::as_u64) {
@@ -347,6 +387,26 @@ pub fn create_code_from_json(
                 }
 
                 new_line = String::new();
+
+                // Description
+                if let Some(description) = obj.get("description").and_then(Value::as_str) {
+                    let lines: Vec<&str> = description.split('\n').collect();
+                    let last_i = lines.len().saturating_sub(1);
+
+                    for (i, line) in lines.iter().enumerate() {
+                        if i == 0 {
+                            if i == last_i {
+                                write!(code, "\n/// {}", line).unwrap();
+                            } else {
+                                write!(code, "\n/// {}\n", line).unwrap();
+                            }
+                        } else if i == last_i {
+                            write!(code, "/// {}", line).unwrap();
+                        } else if !line.trim().is_empty() {
+                            write!(code, "/// {}\n", line).unwrap();
+                        }
+                    }
+                }
 
                 // Priority
                 if let Some(priority) = obj.get("priority").and_then(Value::as_u64) {
@@ -540,6 +600,7 @@ fn split_sections(lines: &[String]) -> HashMap<String, Vec<String>> {
 fn parse_profiles(lines: Option<&Vec<String>>) -> Vec<Value> {
     let mut profiles_object = Vec::new();
     let mut seen_labels: HashSet<String> = HashSet::new();
+    let mut description = String::new();
 
     for line in lines.into_iter().flatten() {
         let line = line.trim();
@@ -551,10 +612,25 @@ fn parse_profiles(lines: Option<&Vec<String>>) -> Vec<Value> {
 
         let mut entry = Map::new();
 
-        if full_line_comment(line) {
+        if is_doc_comment(line) {
+            description.push_str(&line[3..]);
+            continue;
+        } else if full_line_comment(line) {
             entry.insert("comment".to_string(), json!(line[2..].trim()));
             profiles_object.push(Value::Object(entry));
             continue;
+        }
+
+        if !description.is_empty() {
+            description = description
+                .replace("\\\\n", "\n")
+                .replace("\\n", "\n")
+                .lines()
+                .map(str::trim)
+                .collect::<Vec<_>>()
+                .join("\n");
+            entry.insert("description".to_string(), json!(description));
+            description.clear();
         }
 
         // Inline comment
@@ -579,6 +655,7 @@ fn parse_boards(lines: Option<&Vec<String>>) -> Vec<Value> {
     let mut boards_object = Vec::new();
     let mut seen_labels: HashSet<String> = HashSet::new();
     let mut needs_finish_place = true;
+    let mut description = String::new();
 
     for line in lines.into_iter().flatten() {
         let line = line.trim();
@@ -591,11 +668,27 @@ fn parse_boards(lines: Option<&Vec<String>>) -> Vec<Value> {
 
         let mut entry = Map::new();
 
+        if is_doc_comment(line) {
+            description.push_str(&line[3..]);
+            continue;
+        }
         // full-line comment
-        if full_line_comment(line) {
+        else if full_line_comment(line) {
             entry.insert("comment".to_string(), json!(line[2..].trim()));
             boards_object.push(Value::Object(entry));
             continue;
+        }
+
+        if !description.is_empty() {
+            description = description
+                .replace("\\\\n", "\n")
+                .replace("\\n", "\n")
+                .lines()
+                .map(str::trim)
+                .collect::<Vec<_>>()
+                .join("\n");
+            entry.insert("description".to_string(), json!(description));
+            description.clear();
         }
 
         let links = extract_links(line);
@@ -679,6 +772,7 @@ fn parse_boards(lines: Option<&Vec<String>>) -> Vec<Value> {
 
 fn parse_tasks(lines: Option<&Vec<String>>) -> Vec<Value> {
     let mut tasks = Vec::new();
+    let mut description = String::new();
 
     for line in lines.into_iter().flatten() {
         let line = line.trim();
@@ -690,8 +784,12 @@ fn parse_tasks(lines: Option<&Vec<String>>) -> Vec<Value> {
 
         let mut entry = Map::new();
 
+        if is_doc_comment(line) {
+            description.push_str(&line[3..]);
+            continue;
+        }
         // full-line comment always counts
-        if full_line_comment(line) {
+        else if full_line_comment(line) {
             entry.insert("comment".to_string(), json!(line[2..].trim()));
             tasks.push(Value::Object(entry));
             continue;
@@ -700,6 +798,18 @@ fn parse_tasks(lines: Option<&Vec<String>>) -> Vec<Value> {
         let links = extract_links(line);
         if !links.is_empty() {
             entry.insert("links".to_string(), json!(links));
+        }
+
+        if !description.is_empty() {
+            description = description
+                .replace("\\\\n", "\n")
+                .replace("\\n", "\n")
+                .lines()
+                .map(str::trim)
+                .collect::<Vec<_>>()
+                .join("\n");
+            entry.insert("description".to_string(), json!(description));
+            description.clear();
         }
 
         let line = remove_links(line);
@@ -753,8 +863,17 @@ fn parse_tasks(lines: Option<&Vec<String>>) -> Vec<Value> {
     tasks
 }
 
+fn is_doc_comment(line: &str) -> bool {
+    if line.trim_start().starts_with("///") {
+        return true;
+    }
+    false
+}
+
 fn full_line_comment(line: &str) -> bool {
-    if line.trim_start().starts_with("//") {
+    if line.trim_start().starts_with("///") {
+        return false;
+    } else if line.trim_start().starts_with("//") {
         return true;
     }
     false

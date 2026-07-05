@@ -120,7 +120,8 @@
         "month": 5,
         "year": 2026
       },
-      "color": "ff0000"
+      "color": "ff0000",
+      "description": "This is a description\n## In md"
     },
     {
       "priority": 0,
